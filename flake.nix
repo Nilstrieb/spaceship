@@ -46,6 +46,7 @@
             ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
           ];
         packages = (with pkgs; [
+          ffmpeg
         ]);
       };
     });

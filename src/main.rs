@@ -1,6 +1,11 @@
 //! A simple 3D scene with light shining over a cube sitting on a plane.
 
-use bevy::prelude::*;
+use bevy::{
+    audio::PlaybackMode,
+    input::mouse::{MouseMotion, MouseWheel},
+    prelude::*,
+    window::PrimaryWindow,
+};
 use bevy_rapier3d::prelude::*;
 
 fn main() {
@@ -10,10 +15,12 @@ fn main() {
         .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
-            FixedUpdate,
+            Update,
             (
-                apply_velocity,
-                fire_thrusters.after(apply_velocity),
+                fire_thrusters,
+                orbit_camera,
+                apply_gravity,
+                bevy::window::close_on_esc,
             ),
         )
         .run();
@@ -24,42 +31,113 @@ struct SpaceshipBundle {
     ship_marker: Spaceship,
     model: PbrBundle,
     vel: Velocity,
-    gravity: Gravity,
     body: RigidBody,
     collider: Collider,
     restitution: Restitution,
+    mass: Mass,
+    thrusters: Thrusters,
+    thruster_force: ExternalForce,
 }
-
-#[derive(Component, Deref, DerefMut)]
-struct Velocity(Vec3);
 
 #[derive(Component)]
 struct Spaceship;
 
+/// Mass in kg.
 #[derive(Component)]
-struct Gravity;
+struct Mass(f32);
 
 #[derive(Component)]
-struct Ground;
+struct Thrusters {
+    /// Strength in some units
+    strength: f32,
+}
+
+#[derive(Component)]
+struct HasGravity {
+    mass: f32,
+}
+
+#[derive(Component)]
+struct OrbitCamera {
+    radius: f32,
+}
+
+#[derive(Component)]
+struct ThrusterSound;
 
 fn fire_thrusters(
+    mut commands: Commands,
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<&mut Velocity, With<Spaceship>>,
-    time_step: Res<FixedTime>,
+    mut query: Query<(&mut ExternalForce, &Thrusters)>,
+    sound_query: Query<&AudioSink, With<ThrusterSound>>,
+    asset_server: Res<AssetServer>,
 ) {
-    let mut transform = query.single_mut();
+    let (mut force, thrusters) = query.single_mut();
 
-    if keyboard_input.pressed(KeyCode::Space) {
-        transform.y += 10.0 * time_step.period.as_secs_f32();
+    if keyboard_input.just_pressed(KeyCode::Space) {
+        if let Ok(sound) = sound_query.get_single() {
+            sound.play();
+        } else {
+            commands.spawn((
+                AudioBundle {
+                    source: asset_server.load("thrusters_loop.ogg"),
+                    settings: PlaybackSettings {
+                        mode: PlaybackMode::Loop,
+                        ..default()
+                    },
+                },
+                ThrusterSound,
+            ));
+        }
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Space) {
+        force.force = Vec3 {
+            x: 0.0,
+            y: thrusters.strength,
+            z: 0.0,
+        };
+    } else if keyboard_input.just_released(KeyCode::Space) {
+        if let Ok(sound) = sound_query.get_single() {
+            sound.pause();
+        }
+        force.force = Vec3::ZERO;
     }
 }
 
-// TODO: DELETE
-fn apply_velocity(mut query: Query<(&mut Transform, &Velocity)>, time_step: Res<FixedTime>) {
-    for (mut trans, vel) in &mut query {
-        trans.translation.x += vel.x * time_step.period.as_secs_f32();
-        trans.translation.y += vel.y * time_step.period.as_secs_f32();
-        trans.translation.z += vel.z * time_step.period.as_secs_f32();
+fn apply_gravity(query: Query<&mut ExternalForce, With<Spaceship>>) {}
+
+// adapted from https://bevy-cheatbook.github.io/cookbook/pan-orbit-camera.html
+fn orbit_camera(
+    mut ev_motion: EventReader<MouseMotion>,
+    mut ev_scroll: EventReader<MouseWheel>,
+    mut query: Query<(&mut OrbitCamera, &mut Transform), Without<Spaceship>>,
+    spaceship_query: Query<&Transform, With<Spaceship>>,
+    window_query: Query<&Window, With<PrimaryWindow>>,
+) {
+    let window = window_query.single();
+    let rotation_move: Vec2 = ev_motion.iter().map(|ev| ev.delta).sum();
+    let scroll: f32 = ev_scroll.iter().map(|ev| ev.y).sum();
+
+    for (mut orbit, mut transform) in &mut query {
+        if rotation_move.length_squared() > 0.0 {
+            let window = Vec2::new(window.width(), window.height());
+            let delta_x = rotation_move.x / window.x * std::f32::consts::PI * 2.0;
+            let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
+            let yaw = Quat::from_rotation_y(-delta_x);
+            let pitch = Quat::from_rotation_x(-delta_y);
+            transform.rotation *= yaw;
+            transform.rotation *= pitch;
+        }
+        if scroll.abs() > 0.0 {
+            orbit.radius -= scroll * orbit.radius * 0.2;
+            // dont allow zoom to reach zero or you get stuck
+            orbit.radius = f32::max(orbit.radius, 0.05);
+        }
+
+        let rot_matrix = Mat3::from_quat(transform.rotation);
+        transform.translation = spaceship_query.single().translation
+            + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, orbit.radius));
     }
 }
 
@@ -69,20 +147,18 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // plane
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(shape::Plane::from_size(5.0).into()),
-            material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
-            transform: Transform::from_scale(Vec3 {
-                x: 5.0,
-                y: 1.0,
-                z: 5.0,
-            }),
-            ..default()
-        },
-        Ground,
-        Collider::cuboid(5.0, 0.1, 5.0),
+    let mut rapier = RapierConfiguration::default();
+    // We ain't a normal game, we do our own gravity.
+    rapier.gravity = Vec3::new(0.0, -0.5, 0.0);
+    commands.insert_resource(rapier);
+
+    commands.spawn(PlanetBundle::new(
+        &mut meshes,
+        &mut materials,
+        Transform::from_xyz(0.0, -100.0, 0.0),
+        100.0,
+        0.0,
+        Color::rgb(0.2, 0.8, 0.5),
     ));
 
     commands.spawn(SpaceshipBundle::new(&mut meshes, &mut materials));
@@ -97,43 +173,86 @@ fn setup(
         ..default()
     });
     // camera
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+
+    let camera_translation = Vec3::new(-2.0, 2.5, 5.0);
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_translation(camera_translation)
+                .looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        OrbitCamera {
+            radius: camera_translation.length(),
+        },
+    ));
 }
 
 impl SpaceshipBundle {
     fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+        let height = 4.0;
+        let width = 0.5;
+
         Self {
             ship_marker: Spaceship,
             model: PbrBundle {
-                mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+                mesh: meshes.add(Mesh::from(shape::Box::new(width, height, width))),
                 material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
-                transform: Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3 {
+                transform: Transform::from_xyz(0.0, 3.0, 0.0).with_scale(Vec3 {
                     x: 1.0,
                     y: 1.0,
                     z: 1.0,
                 }),
                 ..default()
             },
-            vel: Velocity(Vec3::default()),
-            gravity: Gravity,
+            vel: Velocity {
+                linvel: Vec3::ZERO,
+                angvel: Vec3::ZERO,
+            },
+            mass: Mass(1000.0),
             body: RigidBody::Dynamic,
-            collider: Collider::ball(0.5),
+            collider: Collider::cuboid(width / 2.0, height / 2.0, width / 2.0),
             restitution: Restitution::coefficient(0.1),
+            thrusters: Thrusters { strength: 1.0 },
+            thruster_force: ExternalForce {
+                force: Vec3::new(0.0, -0.5, 0.0), // gravity
+                torque: Vec3::ZERO,
+            },
         }
     }
 }
 
-fn collides(a_pos: Vec3, a_size: Vec3, b_pos: Vec3, b_size: Vec3) -> bool {
-    let a_min = a_pos - a_size / 2.0;
-    let a_max = a_pos + a_size * 2.0;
-    let b_min = b_pos - b_size / 2.0;
-    let b_max = b_pos + b_size / 2.0;
+#[derive(Bundle)]
+struct PlanetBundle {
+    mesh: PbrBundle,
+    coll: Collider,
+    gravity: HasGravity,
+}
 
-    let axis_collides =
-        |axis: fn(Vec3) -> f32| axis(a_min) < axis(b_max) && axis(a_max) > axis(b_min);
-
-    axis_collides(|v| v.x) && axis_collides(|v| v.y) && axis_collides(|v| v.z)
+impl PlanetBundle {
+    fn new(
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        position: Transform,
+        radius: f32,
+        mass: f32,
+        color: Color,
+    ) -> Self {
+        PlanetBundle {
+            mesh: PbrBundle {
+                mesh: meshes.add(
+                    shape::UVSphere {
+                        radius,
+                        sectors: 100,
+                        stacks: 100,
+                    }
+                    .into(),
+                ),
+                material: materials.add(color.into()),
+                transform: position,
+                ..default()
+            },
+            coll: Collider::ball(radius),
+            gravity: HasGravity { mass },
+        }
+    }
 }
