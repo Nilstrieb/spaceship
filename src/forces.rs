@@ -1,12 +1,11 @@
-use std::any::TypeId;
+use std::{any::TypeId, collections::BTreeMap};
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::ExternalForce;
-use indexmap::IndexMap;
 
 #[derive(Component, Default)]
 pub struct ExternalForceSet {
-    forces: IndexMap<TypeId, ExternalForce, ahash::RandomState>,
+    forces: BTreeMap<TypeId, ExternalForce>,
 }
 
 impl ExternalForceSet {

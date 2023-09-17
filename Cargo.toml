@@ -19,5 +19,4 @@ bevy_rapier3d = { version = "0.22.0", features = [
     "debug-render-3d",
 ] }
 glam = { version = "0.24.1", features = ["debug-glam-assert"] }
-indexmap = "2.0.0"
 orbital = { git = "https://github.com/oli-obk/solar_sailors.git", rev = "2fabdd044f0f362595494dcad5102c50ae9572f7" }

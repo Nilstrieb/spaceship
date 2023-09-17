@@ -9,6 +9,7 @@ use bevy::{
 };
 use bevy_rapier3d::prelude::*;
 use forces::ExternalForceSet;
+use glam::DVec2;
 
 use crate::forces::update_external_forces;
 
@@ -198,21 +199,18 @@ fn debug_spaceship_orbit(
     gizmos.ray(body_pos, rotated_pos, Color::FUCHSIA);
     gizmos.ray(
         body_pos,
-        rotated_vel.normalize_or_zero() * 120.0,
+        rotated_vel.normalize_or_zero() * 12000.0,
         Color::OLIVE,
     );
 
     let orbit = orbit::Orbit::from_pos_dir(
         body_gravity.mass.into(),
-        rotated_pos.x.into(),
-        rotated_pos.z.into(),
-        rotated_vel.x.into(),
-        rotated_vel.z.into(),
+        DVec2::new(rotated_pos.x.into(), rotated_pos.z.into()),
+        DVec2::new(rotated_vel.x.into(), rotated_vel.z.into()),
     );
     text.sections[1].value = format!("{:.2}", orbit.semi_major_axis);
     text.sections[3].value = format!("{:.2}", orbit.apoapsis());
     text.sections[5].value = format!("{:.2}", orbit.periapsis());
-
 
     gizmos.ray_gradient(ship_pos, velocity, Color::RED, Color::GREEN);
     gizmos.ray_gradient(ship_pos, translation, Color::BLUE, Color::GREEN);

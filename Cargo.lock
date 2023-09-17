@@ -3071,7 +3071,6 @@ dependencies = [
  "bevy",
  "bevy_rapier3d",
  "glam",
- "indexmap 2.0.0",
  "orbital",
 ]
 

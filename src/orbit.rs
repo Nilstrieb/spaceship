@@ -8,15 +8,14 @@ pub struct Orbit {
 
 pub const G: f64 = 6.6e-11;
 
-impl Orbit {
-    pub fn from_pos_dir(m: f64, x: f64, y: f64, vx: f64, vy: f64) -> Orbit {
-        let v = DVec2::new(vx, vy);
-        let v = v.length();
+fn cartesian_to_polar(pos: DVec2) -> (f64, f64) {
+    (pos.length(), f64::atan(pos.y / pos.x))
+}
 
-        let r_squared = x * x + y * y;
-        let r = r_squared.sqrt();
-        let theta = y.atan2(x);
-        let psi = vy.atan2(vx);
+impl Orbit {
+    pub fn from_pos_dir(m: f64, pos: DVec2, v: DVec2) -> Orbit {
+        let (r, theta) = cartesian_to_polar(pos);
+        let (v, psi) = cartesian_to_polar(v);
 
         // https://phys.libretexts.org/Bookshelves/Astronomy__Cosmology/Celestial_Mechanics_(Tatum)/09%3A_The_Two_Body_Problem_in_Two_Dimensions/9.08%3A_Orbital_Elements_and_Velocity_Vector
 
@@ -48,17 +47,21 @@ impl Orbit {
 
 #[cfg(test)]
 mod tests {
+    use glam::DVec2;
+
     #[test]
     fn geostationary() {
-        let orbit = super::Orbit::from_pos_dir(5.972e24, 42000.0, 0.0, 0.0, 3074.0);
+        let orbit =
+            super::Orbit::from_pos_dir(5.972e24, DVec2::new(42000.0, 0.0), DVec2::new(0.0, 3074.0));
         assert!(
             (21000.0 - orbit.semi_major_axis) < 20.0,
             "{} == {}",
             21000.0,
             orbit.semi_major_axis
         );
+        // this is sus.
         assert!(
-            (1.0 - orbit.eccentricity) < 0.1,
+            (1.0 - orbit.eccentricity).abs() < 0.1,
             "{} == {}",
             1.0,
             orbit.eccentricity
