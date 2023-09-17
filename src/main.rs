@@ -69,6 +69,8 @@ struct OrbitCamera {
 #[derive(Component)]
 struct ThrusterSound;
 
+const AMOUNT_OF_FUNNY_ORBIT_SPHERES: u32 = 1000;
+
 fn fire_thrusters(
     mut commands: Commands,
     keyboard_input: Res<Input<KeyCode>>,
@@ -148,7 +150,7 @@ fn apply_gravity(
             .translation
             .distance(body_transform.translation) as f64;
 
-        let fg = (orbit::G * (gravity.mass as f64)) / (distance * distance);
+        let fg = (orbit::G * gravity.mass) / (distance * distance);
         let direction = (body_transform.translation - ship_transform.translation).normalize();
 
         let fg = ExternalForce {
@@ -168,6 +170,15 @@ fn debug_spaceship_orbit(
     body_query: Query<(&Transform, &GravityAttractor), Without<Spaceship>>,
     mut text_query: Query<&mut Text, With<OrbitText>>,
     mut gizmos: Gizmos,
+    mut query_sphere: Query<
+        &mut Transform,
+        (
+            With<FunnyOrbitalSphere>,
+            Without<OrbitText>,
+            Without<Spaceship>,
+            Without<GravityAttractor>,
+        ),
+    >,
 ) {
     let mut text = text_query.single_mut();
     let (ship_transform, &v) = query.single();
@@ -204,7 +215,7 @@ fn debug_spaceship_orbit(
     );
 
     let orbit = orbit::Orbit::from_pos_dir(
-        body_gravity.mass.into(),
+        body_gravity.mass,
         DVec2::new(rotated_pos.x.into(), rotated_pos.z.into()),
         DVec2::new(rotated_vel.x.into(), rotated_vel.z.into()),
     );
@@ -216,6 +227,17 @@ fn debug_spaceship_orbit(
     gizmos.ray_gradient(ship_pos, translation, Color::BLUE, Color::GREEN);
 
     gizmos.line(body_transform.translation, ship_pos, Color::WHITE);
+
+    let base_pos = body_pos;
+    let distance = (orbit.semi_major_axis as f32) * 2.0;
+    for (i, mut sphere) in query_sphere.iter_mut().enumerate() {
+        let angle = std::f32::consts::TAU / (AMOUNT_OF_FUNNY_ORBIT_SPHERES as f32) * (i as f32);
+
+        let pos = Vec3::new(angle.cos(), 0.0, angle.sin()) * distance;
+        let rotated = base_pos + -orbital_plane_rot * (pos - base_pos);
+
+        sphere.translation = base_pos + rotated;
+    }
 }
 
 // adapted from https://bevy-cheatbook.github.io/cookbook/pan-orbit-camera.html
@@ -252,6 +274,9 @@ fn orbit_camera(
     }
 }
 
+#[derive(Component)]
+struct FunnyOrbitalSphere;
+
 /// set up a simple 3D scene
 fn setup(
     // mut windows: Query<&mut Window>,
@@ -260,10 +285,11 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
-    let mut rapier = RapierConfiguration::default();
     // We ain't a normal game, we do our own gravity.
-    rapier.gravity = Vec3::new(0.0, 0.0, 0.0);
-    commands.insert_resource(rapier);
+    commands.insert_resource(RapierConfiguration {
+        gravity: Vec3::ZERO,
+        ..default()
+    });
 
     commands.spawn(PlanetBundle::new(
         &mut meshes,
@@ -278,6 +304,22 @@ fn setup(
         &mut materials,
         Vec3::new(0.0, 100.0, 0.0),
     ));
+
+    for _ in 0..AMOUNT_OF_FUNNY_ORBIT_SPHERES {
+        commands.spawn((
+            FunnyOrbitalSphere,
+            PbrBundle {
+                mesh: meshes.add(
+                    shape::UVSphere {
+                        radius: 100.0,
+                        ..default()
+                    }
+                    .into(),
+                ),
+                ..default()
+            },
+        ));
+    }
 
     // light
     commands.insert_resource(AmbientLight {
@@ -423,7 +465,7 @@ impl PlanetBundle {
                     }
                     .into(),
                 ),
-                material: material,
+                material,
                 transform: position,
                 ..default()
             },

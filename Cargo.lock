@@ -2603,14 +2603,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbital"
-version = "0.1.0"
-source = "git+https://github.com/oli-obk/solar_sailors.git?rev=2fabdd044f0f362595494dcad5102c50ae9572f7#2fabdd044f0f362595494dcad5102c50ae9572f7"
-dependencies = [
- "tracing",
-]
-
-[[package]]
 name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3071,7 +3063,6 @@ dependencies = [
  "bevy",
  "bevy_rapier3d",
  "glam",
- "orbital",
 ]
 
 [[package]]
