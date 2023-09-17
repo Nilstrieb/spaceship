@@ -1,10 +1,11 @@
 mod forces;
+mod orbit;
 
 use bevy::{
     audio::PlaybackMode,
     input::mouse::{MouseMotion, MouseWheel},
     prelude::*,
-    window::{CursorGrabMode, PrimaryWindow},
+    window::PrimaryWindow,
 };
 use bevy_rapier3d::prelude::*;
 use forces::ExternalForceSet;
@@ -12,13 +13,10 @@ use forces::ExternalForceSet;
 use crate::forces::update_external_forces;
 
 fn main() {
-    dbg!(orbital::Orbit::from_pos_dir(42000.0, 0.0, 0.0, 3074.0));
-    return;
-
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        .add_plugins(RapierDebugRenderPlugin::default())
+        // .add_plugins(RapierDebugRenderPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -45,6 +43,7 @@ struct SpaceshipBundle {
     thrusters: Thrusters,
     thruster_force: ExternalForce,
     forces: ExternalForceSet,
+    light: PointLight,
 }
 
 #[derive(Component)]
@@ -58,7 +57,7 @@ struct Thrusters {
 
 #[derive(Component)]
 struct GravityAttractor {
-    mass: f32,
+    mass: f64,
 }
 
 #[derive(Component)]
@@ -141,8 +140,6 @@ fn apply_gravity(
 ) {
     struct GravityForce;
 
-    const G: f64 = 1.0;
-
     let (mut ship_forces, ship_transform) = query.single_mut();
 
     for (gravity, body_transform) in &body_query {
@@ -150,7 +147,7 @@ fn apply_gravity(
             .translation
             .distance(body_transform.translation) as f64;
 
-        let fg = (G * (gravity.mass as f64)) / (distance * distance);
+        let fg = (orbit::G * (gravity.mass as f64)) / (distance * distance);
         let direction = (body_transform.translation - ship_transform.translation).normalize();
 
         let fg = ExternalForce {
@@ -162,15 +159,20 @@ fn apply_gravity(
     }
 }
 
+#[derive(Component)]
+struct OrbitText;
+
 fn debug_spaceship_orbit(
     query: Query<(&Transform, &Velocity), With<Spaceship>>,
-    body_query: Query<&Transform, (With<GravityAttractor>, Without<Spaceship>)>,
+    body_query: Query<(&Transform, &GravityAttractor), Without<Spaceship>>,
+    mut text_query: Query<&mut Text, With<OrbitText>>,
     mut gizmos: Gizmos,
 ) {
+    let mut text = text_query.single_mut();
     let (ship_transform, &v) = query.single();
 
     let ship_pos = ship_transform.translation;
-    let body_transform = body_query.single();
+    let (body_transform, body_gravity) = body_query.single();
     let body_pos = body_transform.translation;
 
     let body_rotation = body_transform.rotation;
@@ -192,7 +194,6 @@ fn debug_spaceship_orbit(
 
     let rotated_vel = orbital_plane_rot * velocity;
     let rotated_pos = orbital_plane_rot * translation;
-    dbg!((rotated_pos, rotated_vel));
 
     gizmos.ray(body_pos, rotated_pos, Color::FUCHSIA);
     gizmos.ray(
@@ -201,15 +202,17 @@ fn debug_spaceship_orbit(
         Color::OLIVE,
     );
 
-    if true && (rotated_pos.length() > 0.0 && rotated_vel.length() > 0.1 && rotated_vel.z > 0.1) {
-        let orbit = orbital::Orbit::from_pos_dir(
-            rotated_pos.x.into(),
-            rotated_pos.z.into(),
-            rotated_vel.x.into(),
-            rotated_vel.z.into(),
-        );
-        dbg!(orbit);
-    }
+    let orbit = orbit::Orbit::from_pos_dir(
+        body_gravity.mass.into(),
+        rotated_pos.x.into(),
+        rotated_pos.z.into(),
+        rotated_vel.x.into(),
+        rotated_vel.z.into(),
+    );
+    text.sections[1].value = format!("{:.2}", orbit.semi_major_axis);
+    text.sections[3].value = format!("{:.2}", orbit.apoapsis());
+    text.sections[5].value = format!("{:.2}", orbit.periapsis());
+
 
     gizmos.ray_gradient(ship_pos, velocity, Color::RED, Color::GREEN);
     gizmos.ray_gradient(ship_pos, translation, Color::BLUE, Color::GREEN);
@@ -253,10 +256,11 @@ fn orbit_camera(
 
 /// set up a simple 3D scene
 fn setup(
-    mut windows: Query<&mut Window>,
+    // mut windows: Query<&mut Window>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let mut rapier = RapierConfiguration::default();
     // We ain't a normal game, we do our own gravity.
@@ -266,23 +270,23 @@ fn setup(
     commands.spawn(PlanetBundle::new(
         &mut meshes,
         &mut materials,
+        &asset_server,
         Transform::from_xyz(0.0, -100.0, 0.0),
-        100.0,
-        5000.0,
-        Color::rgb(0.2, 0.8, 0.5),
+        10000.0,
     ));
 
-    commands.spawn(SpaceshipBundle::new(&mut meshes, &mut materials));
+    commands.spawn(SpaceshipBundle::new(
+        &mut meshes,
+        &mut materials,
+        Vec3::new(0.0, 100.0, 0.0),
+    ));
+
     // light
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
-            intensity: 1500.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        transform: Transform::from_xyz(4.0, 8.0, 4.0),
-        ..default()
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 0.1,
     });
+
     // camera
 
     let camera_translation = Vec3::new(-2.0, 2.5, 5.0);
@@ -297,13 +301,58 @@ fn setup(
         },
     ));
 
-    let mut window = windows.single_mut();
+    commands.spawn((
+        TextBundle::from_sections([
+            TextSection::new(
+                "Semi Major Axis: ",
+                TextStyle {
+                    font_size: 20.0,
+                    color: Color::GRAY,
+                    ..default()
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font_size: 20.0,
+                color: Color::GRAY,
+                ..default()
+            }),
+            TextSection::new(
+                "\nApoapsis: ",
+                TextStyle {
+                    font_size: 20.0,
+                    color: Color::GRAY,
+                    ..default()
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font_size: 20.0,
+                color: Color::GRAY,
+                ..default()
+            }),
+            TextSection::new(
+                "\nPeriapsis: ",
+                TextStyle {
+                    font_size: 20.0,
+                    color: Color::GRAY,
+                    ..default()
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font_size: 20.0,
+                color: Color::GRAY,
+                ..default()
+            }),
+        ]),
+        OrbitText,
+    ));
+
+    // let mut window = windows.single_mut();
     // window.cursor.visible = false;
-    window.cursor.grab_mode = CursorGrabMode::Locked;
+    // window.cursor.grab_mode = CursorGrabMode::Locked;
 }
 
 impl SpaceshipBundle {
-    fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+    fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, pos: Vec3) -> Self {
         let height = 4.0;
         let width = 0.5;
 
@@ -312,19 +361,11 @@ impl SpaceshipBundle {
             model: PbrBundle {
                 mesh: meshes.add(Mesh::from(shape::Box::new(width, height, width))),
                 material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
-                transform: Transform::from_xyz(0.0, 3.0, 0.0).with_scale(Vec3 {
-                    x: 1.0,
-                    y: 1.0,
-                    z: 1.0,
-                }),
+                transform: Transform::from_translation(pos),
                 ..default()
             },
             vel: Velocity {
-                linvel: Vec3 {
-                    x: 100.0,
-                    y: 100.0,
-                    z: 100.0,
-                },
+                linvel: Vec3::ZERO,
                 angvel: Vec3::ZERO,
             },
             body: RigidBody::Dynamic,
@@ -336,6 +377,11 @@ impl SpaceshipBundle {
                 torque: Vec3::ZERO,
             },
             forces: ExternalForceSet::default(),
+            light: PointLight {
+                intensity: 1500.0,
+                shadows_enabled: true,
+                ..default()
+            },
         }
     }
 }
@@ -351,26 +397,39 @@ impl PlanetBundle {
     fn new(
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        assert_server: &AssetServer,
         position: Transform,
-        radius: f32,
-        mass: f32,
-        color: Color,
+        radius: f64,
     ) -> Self {
+        use std::f64::consts::PI;
+
+        let density = 2000.0 /* kg*m^3 */;
+
+        let mass = (4.0 / 3.0) * PI * radius * radius * radius * density;
+
+        let texture_handle = assert_server.load("2k_moon.png");
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(texture_handle),
+            alpha_mode: AlphaMode::Blend,
+            unlit: false,
+            ..default()
+        });
+
         PlanetBundle {
             mesh: PbrBundle {
                 mesh: meshes.add(
                     shape::UVSphere {
-                        radius,
+                        radius: radius as f32,
                         sectors: 100,
                         stacks: 100,
                     }
                     .into(),
                 ),
-                material: materials.add(color.into()),
+                material: material,
                 transform: position,
                 ..default()
             },
-            coll: Collider::ball(radius),
+            coll: Collider::ball(radius as f32),
             gravity: GravityAttractor { mass },
         }
     }

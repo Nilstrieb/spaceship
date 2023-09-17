@@ -45,8 +45,10 @@
             ''-I"${pkgs.glib.dev}/include/glib-2.0"''
             ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
           ];
+        RUST_BACKTRACE = "1";
         packages = (with pkgs; [
           ffmpeg
+          imagemagick
         ]);
       };
     });
